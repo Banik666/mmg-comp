@@ -1,0 +1,49 @@
+#include <Arduino.h>
+
+hw_timer_t *My_timer = NULL;
+const uint16_t N_CHANNEL = 2;
+const uint16_t ADC_BUFF_SIZE = 8192;
+const uint16_t SECONDARY_ADC_BUFF_SIZE = 128;
+const uint16_t TIMER_PRESCALER = 80;
+const uint16_t TIMER_TICK_INTERVAL = 2000;
+const uint16_t I2C_SDA = 21;
+const uint16_t I2C_SCA = 22;
+const uint16_t PIEZO_PIN = 35; // to be determined
+const uint16_t FSR_PIN = 34; // to be determined
+uint16_t ADC_BUFF[N_CHANNEL][ADC_BUFF_SIZE+100];
+uint16_t SECONDARY_ADC_BUFF[N_CHANNEL][SECONDARY_ADC_BUFF_SIZE+10];
+uint16_t start = 0;
+uint16_t end = 0; // there will be no data here
+
+// Timer Inturrupt FN
+void IRAM_ATTR onTimer(){
+  ADC_BUFF[0][end] = analogRead(PIEZO_PIN);
+  ADC_BUFF[1][end] = analogRead(FSR_PIN);
+  end = (end+1) % ADC_BUFF_SIZE;
+}
+
+void setup() {
+  Serial.begin(1000000);
+  // Configure the timer inturrupt;
+  My_timer = timerBegin(0, TIMER_PRESCALER, true);
+  timerAttachInterrupt(My_timer, &onTimer, true);
+  timerAlarmWrite(My_timer, TIMER_TICK_INTERVAL, true);
+  timerAlarmEnable(My_timer);
+}
+
+void loop() {
+
+  // check if buffer limit crossed SECONDARY_BUFFER_SIZE;
+  if( (end-start + ADC_BUFF_SIZE) % ADC_BUFF_SIZE > SECONDARY_ADC_BUFF_SIZE){
+    for (uint16_t i = 0; i < SECONDARY_ADC_BUFF_SIZE; i++){
+      SECONDARY_ADC_BUFF[0][i] = ADC_BUFF[0][start];
+      SECONDARY_ADC_BUFF[1][i] = ADC_BUFF[1][start];
+      start = (start+1) % ADC_BUFF_SIZE;
+    }
+
+    // send the data to serial
+    Serial.write((const uint8_t*) SECONDARY_ADC_BUFF, 
+      SECONDARY_ADC_BUFF_SIZE * N_CHANNEL * sizeof(uint16_t) );
+  }
+
+}
