@@ -1,0 +1,131 @@
+import serial
+import time
+import csv
+from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from collections import deque
+
+# ================= CONFIGURATION =================
+PORT = 'COM4'
+BAUD = 115200
+
+# Create a unique CSV filename based on the current date and time
+csv_filename = f"sensor_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+# Initialize CSV file with headers
+with open(csv_filename, mode='w', newline='') as file:
+    writer = csv.writer(file)
+    writer.writerow(["Timestamp", "AccX", "AccY", "AccZ", "GyroX", "GyroY", "GyroZ", "FSR", "Piezo"])
+
+print(f"Logging data to file: {csv_filename}")
+print(f"Connecting to {PORT} at {BAUD} baud...")
+
+try:
+    # Reset DTR/RTS lines to ensure clean start
+    ser = serial.Serial(PORT, BAUD, timeout=0.1)
+    ser.dtr = False
+    ser.rts = False
+    time.sleep(1)
+    ser.dtr = True
+    ser.rts = True
+    time.sleep(1)
+    ser.flushInput()
+    print("Connected successfully! Logging data and displaying charts...")
+except Exception as e:
+    print(f"Error opening port {PORT}: {e}")
+    exit()
+
+# Data Buffers for Visualization
+MAX_LEN = 1000
+acc_x, acc_y, acc_z = deque(maxlen=MAX_LEN), deque(maxlen=MAX_LEN), deque(maxlen=MAX_LEN)
+gyro_x, gyro_y, gyro_z = deque(maxlen=MAX_LEN), deque(maxlen=MAX_LEN), deque(maxlen=MAX_LEN)
+fsr, piezo = deque(maxlen=MAX_LEN), deque(maxlen=MAX_LEN)
+
+# Setup Matplotlib Plotting Window
+plt.style.use('dark_background')
+fig, (ax_acc, ax_gyro, ax_analog) = plt.subplots(3, 1, figsize=(10, 8))
+fig.canvas.manager.set_window_title("ESP32 Sensor Real-Time Dashboard & CSV Logger")
+
+# Accelerometer Plot
+l_ax, = ax_acc.plot([], [], 'r-', label='Acc X')
+l_ay, = ax_acc.plot([], [], 'g-', label='Acc Y')
+l_az, = ax_acc.plot([], [], 'b-', label='Acc Z')
+ax_acc.set_title("1. Accelerometer (m/s²)")
+ax_acc.set_ylim(-20, 20)
+ax_acc.legend(loc="upper right")
+ax_acc.grid(True, alpha=0.2)
+
+# Gyroscope Plot
+l_gx, = ax_gyro.plot([], [], 'm-', label='Gyro X')
+l_gy, = ax_gyro.plot([], [], 'y-', label='Gyro Y')
+l_gz, = ax_gyro.plot([], [], 'c-', label='Gyro Z')
+ax_gyro.set_title("2. Gyroscope (rad/s)")
+ax_gyro.set_ylim(-5, 5)
+ax_gyro.legend(loc="upper right")
+ax_gyro.grid(True, alpha=0.2)
+
+# Analog Plot
+l_fsr, = ax_analog.plot([], [], 'orange', label='FSR')
+l_piezo, = ax_analog.plot([], [], 'purple', label='Piezo')
+ax_analog.set_title("3. FSR & Piezo (ADC Raw)")
+ax_analog.set_ylim(-100, 4200)
+ax_analog.legend(loc="upper right")
+ax_analog.grid(True, alpha=0.2)
+
+first_data_received = False
+
+def update(frame):
+    global first_data_received
+    
+    # Read available data from serial port
+    while ser.in_waiting > 0:
+        try:
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+            if not line:
+                continue
+
+            parts = line.split(',')
+            if len(parts) == 8:
+                if not first_data_received:
+                    print("First valid packet received! Recording live to CSV...")
+                    first_data_received = True
+
+                data = [float(p) for p in parts]
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+                # 1. Append data row directly to the CSV file
+                with open(csv_filename, mode='a', newline='') as file:
+                    csv_writer = csv.writer(file)
+                    csv_writer.writerow([timestamp] + data)
+
+                # 2. Append data to real-time plotting buffers
+                acc_x.append(data[0]); acc_y.append(data[1]); acc_z.append(data[2])
+                gyro_x.append(data[3]); gyro_y.append(data[4]); gyro_z.append(data[5])
+                fsr.append(data[6]); piezo.append(data[7])
+        except Exception:
+            pass
+
+    if len(acc_x) > 0:
+        x_axis = range(len(acc_x))
+        l_ax.set_data(x_axis, list(acc_x))
+        l_ay.set_data(x_axis, list(acc_y))
+        l_az.set_data(x_axis, list(acc_z))
+        ax_acc.set_xlim(0, max(len(acc_x), 10))
+
+        l_gx.set_data(x_axis, list(gyro_x))
+        l_gy.set_data(x_axis, list(gyro_y))
+        l_gz.set_data(x_axis, list(gyro_z))
+        ax_gyro.set_xlim(0, max(len(gyro_x), 10))
+
+        l_fsr.set_data(x_axis, list(fsr))
+        l_piezo.set_data(x_axis, list(piezo))
+        ax_analog.set_xlim(0, max(len(fsr), 10))
+
+# Real-Time Chart Animation Trigger
+ani = FuncAnimation(fig, update, interval=30, cache_frame_data=False)
+plt.tight_layout()
+plt.show()
+
+ser.close()
+print(f"\nSession ended. All sensor data saved to: {csv_filename}")
